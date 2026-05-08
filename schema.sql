@@ -1,5 +1,6 @@
 CREATE TABLE IF NOT EXISTS jobs (
-    id SERIAL PRIMARY KEY,
+    id VARCHAR(36) PRIMARY KEY,
+
     task_type VARCHAR(255) NOT NULL,
     payload TEXT NOT NULL DEFAULT '{}',
     status VARCHAR(255) NOT NULL DEFAULT 'pending',

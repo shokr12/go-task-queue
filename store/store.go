@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"task-queue/job"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -14,16 +16,22 @@ type Store struct {
 }
 
 func NewStore(dsn string) (*Store, error) {
-	pg, err := pgxpool.New(context.Background(), dsn)
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	config.MaxConns = 50
+	config.MinConns = 10
+	config.MaxConnIdleTime = 5 * time.Minute
+
+	pg, err := pgxpool.NewWithConfig(context.Background(), config)
 	if err != nil {
 		return nil, fmt.Errorf("unable to connect to database: %v", err)
 	}
-	err = pg.Ping(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("unable to ping database: %v", err)
-	}
 	return &Store{pg: pg}, nil
 }
+
 
 func (s *Store) Close() {
 	s.pg.Close()
@@ -34,17 +42,25 @@ func (s *Store) RunMigrations(ctx context.Context, schema string) error {
 	return err
 }
 
-func (s *Store) CreateJob(ctx context.Context, j *job.Job) error {
-	payloadJSON, err := json.Marshal(j.Payload)
-	if err != nil {
-		return err
+func (s *Store) CreateJobBatch(ctx context.Context, jobs []*job.Job) error {
+	batch := &pgx.Batch{}
+	for _, j := range jobs {
+		payloadJSON, _ := json.Marshal(j.Payload)
+		batch.Queue(`INSERT INTO jobs (id, task_type, payload, status, created_at, retries, updated_at) 
+		             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			j.ID, j.TaskType, string(payloadJSON), j.Status, j.CreatedAt, j.Retries, j.UpdatedAt)
 	}
-	err = s.pg.QueryRow(ctx, `
-		INSERT INTO jobs (task_type, payload, status, created_at, retries, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id
-	`, j.TaskType, string(payloadJSON), j.Status, j.CreatedAt, j.Retries, j.UpdatedAt).Scan(&j.ID)
-	return err
+	
+	results := s.pg.SendBatch(ctx, batch)
+	defer results.Close()
+	
+	for i := 0; i < len(jobs); i++ {
+		_, err := results.Exec()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) UpdateJob(ctx context.Context, j *job.Job) error {
@@ -56,7 +72,7 @@ func (s *Store) UpdateJob(ctx context.Context, j *job.Job) error {
 	return err
 }
 
-func (s *Store) GetJobByID(ctx context.Context, jobID int) (*job.Job, error) {
+func (s *Store) GetJobByID(ctx context.Context, jobID string) (*job.Job, error) {
 	var j job.Job
 	var payloadStr string
 	err := s.pg.QueryRow(ctx, `
@@ -105,7 +121,7 @@ func (s *Store) ListJobs(ctx context.Context, status string, limit int) ([]job.J
 	return jobs, nil
 }
 
-func (s *Store) IncrementRetry(ctx context.Context, jobID int) error {
+func (s *Store) IncrementRetry(ctx context.Context, jobID string) error {
 	_, err := s.pg.Exec(ctx, `
 		UPDATE jobs 
 		SET retries = retries + 1, updated_at = now()
@@ -114,7 +130,7 @@ func (s *Store) IncrementRetry(ctx context.Context, jobID int) error {
 	return err
 }
 
-func (s *Store) UpdateJobStatus(ctx context.Context, jobID int, status job.JobStatus) error {
+func (s *Store) UpdateJobStatus(ctx context.Context, jobID string, status job.JobStatus) error {
 	_, err := s.pg.Exec(ctx, `
 		UPDATE jobs 
 		SET status = $1, updated_at = now()

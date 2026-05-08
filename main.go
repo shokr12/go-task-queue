@@ -10,8 +10,10 @@ import (
 	"task-queue/handler"
 	"task-queue/store"
 	"task-queue/worker"
+	"task-queue/queue"
 
 	"github.com/joho/godotenv"
+
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
@@ -56,19 +58,23 @@ func main() {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
 
-	h := handler.NewHandler(s, rdb)
+	p := queue.NewProducer(rdb, s)
+
+	h := handler.NewHandler(s, rdb, p)
 	h.RegisterRoutes(r)
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
-	fmt.Println("Server starting on :8080")
+	fmt.Println("Server starting on :8081")
 	go func() {
-		if err := r.Run(":8080"); err != nil {
-			log.Fatalf("Failed to start server: %v", err)
+		if err := r.Run(":8081"); err != nil {
+			log.Printf("Failed to start server: %v", err)
 		}
 	}()
+
+
 
 	<-ctx.Done()
 	fmt.Println("\nShutting down gracefully...")

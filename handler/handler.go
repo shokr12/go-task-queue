@@ -1,10 +1,10 @@
 package handler
 
 import (
-	"encoding/json"
+	"log"
 	"net/http"
-	"strconv"
 	"task-queue/job"
+	"task-queue/queue"
 	"task-queue/store"
 
 	"github.com/gin-gonic/gin"
@@ -12,12 +12,13 @@ import (
 )
 
 type Handler struct {
-	store *store.Store
-	redis *redis.Client
+	store    *store.Store
+	redis    *redis.Client
+	producer *queue.Producer
 }
 
-func NewHandler(s *store.Store, r *redis.Client) *Handler {
-	return &Handler{store: s, redis: r}
+func NewHandler(s *store.Store, r *redis.Client, p *queue.Producer) *Handler {
+	return &Handler{store: s, redis: r, producer: p}
 }
 
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
@@ -32,31 +33,24 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 func (h *Handler) CreateJob(c *gin.Context) {
 	var req job.CreateJobRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Printf("JSON Binding Error: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	j := job.NewJob(req.TaskType, req.Payload)
-	if err := h.store.CreateJob(c.Request.Context(), j); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save job: " + err.Error()})
-		return
-	}
 
-	data, _ := json.Marshal(j)
-	h.redis.RPush(c.Request.Context(), "job_queue", data)
+
+	h.producer.Enqueue(j)
 
 	c.JSON(http.StatusCreated, j)
 }
 
 func (h *Handler) GetJob(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid job id"})
-		return
-	}
+	id := c.Param("id")
 
 	j, err := h.store.GetJobByID(c.Request.Context(), id)
+
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
 		return

@@ -2,6 +2,7 @@ package job
 
 import (
 	"time"
+	"github.com/google/uuid"
 )
 
 type JobStatus string
@@ -14,7 +15,7 @@ const (
 )
 
 type Job struct {
-	ID        int                    `json:"id"`
+	ID        string                 `json:"id"`
 	TaskType  string                 `json:"task_type"`
 	Payload   map[string]interface{} `json:"payload"`
 	Status    JobStatus              `json:"status"`
@@ -22,6 +23,7 @@ type Job struct {
 	Retries   int                    `json:"retries"`
 	UpdatedAt time.Time              `json:"updated_at"`
 }
+
 
 type CreateJobRequest struct {
 	TaskType string                 `json:"task_type" binding:"required"`
@@ -31,6 +33,7 @@ type CreateJobRequest struct {
 func NewJob(taskType string, payload map[string]interface{}) *Job {
 	now := time.Now()
 	return &Job{
+		ID:        uuid.New().String(),
 		TaskType:  taskType,
 		Payload:   payload,
 		Status:    StatusPending,
@@ -39,3 +42,4 @@ func NewJob(taskType string, payload map[string]interface{}) *Job {
 		UpdatedAt: now,
 	}
 }
+

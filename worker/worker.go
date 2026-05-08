@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"sync/atomic"
 )
 
 const (
@@ -17,16 +18,24 @@ const (
 )
 
 type Worker struct {
-	redis *redis.Client
-	store *store.Store
+	redis       *redis.Client
+	store       *store.Store
+	startTime   time.Time
+	activeJobs  int32
+	jobsFinished int32
 }
 
 func NewWorker(r *redis.Client, s *store.Store) *Worker {
 	return &Worker{redis: r, store: s}
 }
 
+
 func (w *Worker) Start(ctx context.Context) error {
 	fmt.Println("Worker started, waiting for jobs...")
+	
+	sem := make(chan struct{},  20000)
+
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -51,16 +60,42 @@ func (w *Worker) Start(ctx context.Context) error {
 			continue
 		}
 
-		w.processJob(ctx, j)
+		sem <- struct{}{} 
+		
+		if atomic.LoadInt32(&w.activeJobs) == 0 {
+			w.startTime = time.Now()
+			atomic.StoreInt32(&w.jobsFinished, 0)
+			fmt.Println(">>> Starting batch timer...")
+		}
+		atomic.AddInt32(&w.activeJobs, 1)
+
+		go func(jobData job.Job) {
+			defer func() { 
+				<-sem
+				finished := atomic.AddInt32(&w.jobsFinished, 1)
+				active := atomic.AddInt32(&w.activeJobs, -1)
+				
+				if active == 0 {
+					duration := time.Since(w.startTime)
+					fmt.Printf("\n==========================================\n")
+					fmt.Printf("BATCH COMPLETED: %d jobs in %v\n", finished, duration)
+					fmt.Printf("Average speed: %.2f jobs/sec\n", float64(finished)/duration.Seconds())
+					fmt.Printf("==========================================\n\n")
+				}
+			}() 
+			w.processJob(ctx, jobData)
+		}(j)
 	}
 }
 
-func (w *Worker) processJob(ctx context.Context, j job.Job) {
-	fmt.Printf("Processing job %v [%s]\n", j.ID, j.TaskType)
 
+func (w *Worker) processJob(ctx context.Context, j job.Job) {
+	
 	if err := w.store.UpdateJobStatus(ctx, j.ID, job.StatusProcessing); err != nil {
 		fmt.Printf("Failed to update job %v status: %v\n", j.ID, err)
 	}
+
+
 
 	err := w.executeJob(j)
 	if err != nil {
@@ -91,15 +126,13 @@ func (w *Worker) executeJob(j job.Job) error {
 	switch j.TaskType {
 	case "send_email":
 		fmt.Printf("  → Sending email to %v\n", j.Payload["to"])
-		time.Sleep(2 * time.Second)
+		
 		return nil
 	case "resize_image":
 		fmt.Printf("  → Resizing image %v\n", j.Payload["image"])
-		time.Sleep(2 * time.Second)
 		return nil
 	case "generate_pdf":
 		fmt.Printf("  → Generating PDF %v\n", j.Payload["pdf"])
-		time.Sleep(2 * time.Second)
 		return nil
 	default:
 		return fmt.Errorf("unknown task type: %s", j.TaskType)
