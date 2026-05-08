@@ -24,7 +24,8 @@ func NewProducer(r *redis.Client, s *store.Store) *Producer {
 		redis:     r,
 		store:     s,
 		buffer:    make(chan *job.Job, 100000), 
-		maxBatch:  500,                        
+		maxBatch:  1000,
+                        
 		flushFreq: 100 * time.Millisecond,     
 	}
 	go p.startFlushLoop()
